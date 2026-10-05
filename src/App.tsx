@@ -81,7 +81,6 @@ function drawPieceMini(
   oy: number,
   size: number,
 ): void {
-  // spawn orientation cells for the preview boxes
   const spawn: Record<PieceKind, Array<[number, number]>> = {
     I: [[0, 1], [1, 1], [2, 1], [3, 1]],
     O: [[1, 0], [2, 0], [1, 1], [2, 1]],
@@ -97,6 +96,51 @@ function drawPieceMini(
   }
 }
 
+// Portrait detection: the daemon pins the layout viewport at 800x480 and
+// rotates the panel, so CSS (orientation: portrait) and Tailwind portrait:
+// variants never match on-device. screen.orientation does report the rotated
+// orientation (portraitSecondary at 270 deg), so check it first and keep
+// matchMedia as the fallback (same approach as Calendar 0.1.7 / Radio 0.6.6).
+function detectPortrait(): boolean {
+  try {
+    if (screen.orientation?.type.startsWith('portrait')) return true;
+  } catch {
+    /* older webview */
+  }
+  try {
+    if (window.matchMedia('(orientation: portrait)').matches) return true;
+  } catch {
+    /* no matchMedia */
+  }
+  return false;
+}
+
+function useIsPortrait(): boolean {
+  const [portrait, setPortrait] = useState(detectPortrait);
+  useEffect(() => {
+    const update = (): void => setPortrait(detectPortrait());
+    let orientation: ScreenOrientation | null = null;
+    let mq: MediaQueryList | null = null;
+    try {
+      orientation = screen.orientation;
+      orientation.addEventListener('change', update);
+      mq = window.matchMedia('(orientation: portrait)');
+      mq.addEventListener('change', update);
+    } catch {
+      /* listeners unavailable */
+    }
+    return () => {
+      try {
+        orientation?.removeEventListener('change', update);
+        mq?.removeEventListener('change', update);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, []);
+  return portrait;
+}
+
 export default function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>('menu');
   const [mode, setMode] = useState<Mode>('classic');
@@ -109,6 +153,7 @@ export default function App(): React.JSX.Element {
   const escTimer = useRef<number | null>(null);
   const touchRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const dasRef = useRef<{ dir: -1 | 1; next: number } | null>(null);
+  const portrait = useIsPortrait();
 
   const game = gameRef.current;
 
@@ -143,7 +188,6 @@ export default function App(): React.JSX.Element {
     if (shot === 'menu') return;
     if (shot === 'game' || shot === 'over') {
       const g = new Game('classic', { onEvent: () => setTick(t => t + 1) }, 7);
-      // script a believable mid-game stack
       const targets = [0, -1, 1, -2, 2, 0, -1, 1, -3, 2, -2, 0, 1, -1];
       for (const dx of targets) {
         if (g.over) break;
@@ -165,7 +209,7 @@ export default function App(): React.JSX.Element {
     }
   }, []);
 
-  // main loop: advance the sim and paint the playfield
+  // main loop
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -174,7 +218,6 @@ export default function App(): React.JSX.Element {
       const dt = Math.min(100, now - last);
       last = now;
       if (g && screen === 'game') {
-        // held left/right buttons get auto-repeat
         const das = dasRef.current;
         if (das && !g.paused && !g.over && now >= das.next) {
           g.move(das.dir);
@@ -199,7 +242,6 @@ export default function App(): React.JSX.Element {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, PW, PH);
 
-    // locked cells
     for (let y = 0; y < VISIBLE_ROWS; y++) {
       const row = g.visibleRow(y);
       const flashing = g.clearing.includes(y + 2); // clearing uses absolute rows
@@ -217,14 +259,12 @@ export default function App(): React.JSX.Element {
     }
 
     if (!g.over && g.piece) {
-      // ghost
       ctx.fillStyle = 'rgba(255,255,255,0.10)';
       for (const [x, y] of g.ghostCells()) {
         const vy = y - 2;
         if (vy < 0) continue;
         ctx.fillRect(x * CELL + 1, vy * CELL + 1, CELL - 2, CELL - 2);
       }
-      // active piece
       const color = BLOCK_COLORS[g.piece.kind];
       for (const [x, y] of g.piece.cells) {
         const vy = y - 2;
@@ -236,7 +276,6 @@ export default function App(): React.JSX.Element {
       }
     }
 
-    // faint grid
     ctx.strokeStyle = 'rgba(255,255,255,0.045)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -245,7 +284,6 @@ export default function App(): React.JSX.Element {
     ctx.stroke();
   };
 
-  // record a finished run against the best score
   useEffect(() => {
     const g = gameRef.current;
     if (!g || !g.over || screen !== 'game') return;
@@ -258,7 +296,6 @@ export default function App(): React.JSX.Element {
     }
   }, [tick, screen, bests]);
 
-  // ---- input ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const g = gameRef.current;
@@ -358,7 +395,6 @@ export default function App(): React.JSX.Element {
     };
   }, [screen, mode, startGame, quitToMenu]);
 
-  // touch gestures on the playfield: tap rotates, swipe moves, swipe down drops
   const onBoardPointerDown = (e: React.PointerEvent): void => {
     touchRef.current = { x: e.clientX, y: e.clientY, t: performance.now() };
   };
@@ -390,17 +426,17 @@ export default function App(): React.JSX.Element {
 
   if (screen === 'menu') {
     return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center bg-screen font-body select-none">
-        <div className="rise mb-1 font-display text-hero font-extrabold tracking-tight text-fg">BLOCK DROP</div>
+      <div className={`flex ${portrait ? 'h-full w-full' : 'h-screen w-screen'} flex-col items-center justify-center bg-screen font-body select-none`}>
+        <div className={`rise mb-1 font-display font-extrabold tracking-tight text-fg ${portrait ? 'text-[52px]' : 'text-hero'}`}>BLOCK DROP</div>
         <div className="mb-8 text-body text-dim">a tiny falling-block game for the car thing</div>
-        <div className="flex gap-4">
+        <div className={portrait ? 'flex flex-col items-center gap-4' : 'flex gap-4'}>
           {MODES.map((m, i) => {
             const best = bests[m.id];
             return (
               <button
                 key={m.id}
                 onClick={() => startGame(m.id)}
-                className="pressable flex h-52 w-56 flex-col items-start justify-between rounded-2xl border border-rule-strong bg-bg p-5 text-left"
+                className={portrait ? 'pressable flex h-40 w-[min(88vw,380px)] flex-col items-start justify-between rounded-2xl border border-rule-strong bg-bg p-4 text-left' : 'pressable flex h-52 w-56 flex-col items-start justify-between rounded-2xl border border-rule-strong bg-bg p-5 text-left'}
               >
                 <div>
                   <div className="font-display text-title font-bold text-fg">{m.name}</div>
@@ -417,14 +453,13 @@ export default function App(): React.JSX.Element {
             );
           })}
         </div>
-        <div className="mt-8 text-small text-dim">
+        <div className={`mt-8 text-small text-dim ${portrait ? 'px-6 text-center' : ''}`}>
           knob: move · knob press: rotate · swipe down: drop · esc: drop · hold esc: exit
         </div>
       </div>
     );
   }
 
-  // ---- game screen ----
   const g = game!;
   const modeLabel = MODES.find(m => m.id === g.mode)!.name.toUpperCase();
   const timeLabel = fmtTime(g.timeMs);
@@ -433,9 +468,114 @@ export default function App(): React.JSX.Element {
 
   const btn = 'pressable flex items-center justify-center rounded-xl border border-rule-strong bg-bg font-display font-bold text-fg';
 
+  // ---- portrait (480x800): vertical reflow; landscape below is untouched ----
+  // gated on the JS detectPortrait() state (screen.orientation), never on CSS,
+  // because the daemon pins the layout viewport at 800x480 and rotates the panel.
+  if (portrait) {
+    return (
+      <div className="relative flex h-full w-full flex-col bg-screen font-body select-none">
+        <div className="flex min-h-0 flex-1 items-center justify-center px-4 pt-3">
+          <div
+            className="relative rounded-lg border border-rule-strong bg-bg"
+            style={{ width: PW + 2, height: PH + 2, touchAction: 'none' }}
+            onPointerDown={onBoardPointerDown}
+            onPointerUp={onBoardPointerUp}
+          >
+            <canvas ref={canvasRef} style={{ width: PW, height: PH }} className="m-[1px] block" />
+          </div>
+        </div>
+
+        <div className="flex w-full items-end justify-between gap-2 px-4 pt-2">
+          <div className="shrink-0">
+            <div className="font-display text-[18px] font-extrabold leading-none tracking-tight text-fg">BLOCK<br />DROP</div>
+            <div className="mt-1 text-tiny font-bold tracking-widest text-accent">{modeLabel}</div>
+          </div>
+          <div>
+            <div className="text-tiny font-bold tracking-widest text-dim">SCORE</div>
+            <div className="font-display text-[20px] font-bold tabular-nums text-fg">{g.score.toLocaleString()}</div>
+          </div>
+          <div>
+            <div className="text-tiny font-bold tracking-widest text-dim">{statName}</div>
+            <div className="font-display text-[20px] font-bold tabular-nums text-fg">{statValue}</div>
+          </div>
+          {g.mode === 'classic' && (
+            <div>
+              <div className="text-tiny font-bold tracking-widest text-dim">LEVEL</div>
+              <div className="font-display text-[20px] font-bold tabular-nums text-fg">{g.level}</div>
+            </div>
+          )}
+          <div>
+            <div className="text-tiny font-bold tracking-widest text-dim">BEST</div>
+            <div className="text-[16px] font-semibold tabular-nums text-muted">
+              {bests[g.mode] === null ? '—' : g.mode === 'sprint' ? fmtTime(bests[g.mode]!) : bests[g.mode]!.toLocaleString()}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex w-full items-start justify-center gap-4 px-4 pt-2">
+          <div>
+            <div className="mb-1 text-center text-tiny font-bold tracking-widest text-dim">HOLD</div>
+            <MiniBox kind={g.holdKind} dim={!g.canHold} onTap={() => g.hold()} />
+          </div>
+          <div>
+            <div className="mb-1 text-center text-tiny font-bold tracking-widest text-dim">NEXT</div>
+            <div className="flex gap-2">
+              {g.queue.slice(0, 3).map((k, i) => (
+                <MiniBox key={i} kind={k} dim={i > 0} />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="w-full px-4 pb-4 pt-2">
+          <div className="flex gap-3">
+            <button className={`${btn} h-14 flex-1 text-[20px]`} onPointerDown={e => { e.preventDefault(); g.rotate(); }}>
+              ⟳ ROTATE
+            </button>
+            <button className={`${btn} h-14 flex-1 text-[20px]`} onPointerDown={e => { e.preventDefault(); g.hardDrop(); }}>
+              ⤓ DROP
+            </button>
+          </div>
+          <div className="mt-3 flex gap-3">
+            <button className={`${btn} h-14 flex-1 text-[22px]`} {...holdMove(-1)}>◀</button>
+            <button className={`${btn} h-14 flex-1 text-[22px]`} {...holdMove(1)}>▶</button>
+            <button className={`${btn} h-14 flex-1 text-body`} onPointerDown={e => { e.preventDefault(); g.hold(); }}>HOLD</button>
+            <button className={`${btn} h-14 flex-1 text-body`} onPointerDown={e => { e.preventDefault(); g.togglePause(); }}>II</button>
+          </div>
+        </div>
+
+        {g.paused && !g.over && (
+          <Overlay>
+            <div className="font-display text-title font-extrabold text-fg">PAUSED</div>
+            <OverlayBtn label="RESUME" primary onClick={() => g.togglePause()} />
+            <OverlayBtn label="RESTART" onClick={() => startGame(g.mode)} />
+            <OverlayBtn label="MENU" onClick={quitToMenu} />
+          </Overlay>
+        )}
+
+        {g.over && (
+          <Overlay>
+            <div className="font-display text-title font-extrabold text-fg">{g.won ? 'SPRINT DONE' : 'GAME OVER'}</div>
+            <div className="flex gap-8 text-center">
+              <Stat label="SCORE" value={g.score.toLocaleString()} />
+              <Stat label={g.mode === 'ultra' ? 'TIME' : 'LINES'} value={g.mode === 'ultra' ? fmtTime(ULTRA_SECONDS * 1000) : g.lines.toString()} />
+              {g.mode === 'sprint' && g.won && <Stat label="TIME" value={fmtTime(g.timeMs)} />}
+              {g.mode === 'classic' && <Stat label="LEVEL" value={g.level.toString()} />}
+            </div>
+            {g.mode === 'sprint' && g.won && bests.sprint !== null && (
+              <div className="text-body text-accent">best {fmtTime(bests.sprint)}</div>
+            )}
+            <OverlayBtn label="PLAY AGAIN" primary onClick={() => startGame(g.mode)} />
+            <OverlayBtn label="MENU" onClick={quitToMenu} />
+          </Overlay>
+        )}
+        <span className="hidden">{tick}</span>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen items-stretch gap-0 bg-screen font-body select-none">
-      {/* left: stats */}
       <div className="flex w-44 shrink-0 flex-col justify-center gap-5 px-5">
         <div>
           <div className="font-display text-[22px] font-extrabold tracking-tight text-fg">BLOCK<br />DROP</div>
@@ -463,7 +603,6 @@ export default function App(): React.JSX.Element {
         </div>
       </div>
 
-      {/* playfield */}
       <div className="flex items-center py-2.5">
         <div
           className="relative rounded-lg border border-rule-strong bg-bg"
@@ -475,7 +614,6 @@ export default function App(): React.JSX.Element {
         </div>
       </div>
 
-      {/* next + hold */}
       <div className="flex w-28 shrink-0 flex-col items-center justify-center gap-4 px-2">
         <div>
           <div className="mb-1 text-center text-tiny font-bold tracking-widest text-dim">HOLD</div>
@@ -491,7 +629,6 @@ export default function App(): React.JSX.Element {
         </div>
       </div>
 
-      {/* right: big controls */}
       <div className="flex flex-1 flex-col justify-center gap-3 px-4 py-4">
         <button className={`${btn} h-20 text-[22px]`} onPointerDown={e => { e.preventDefault(); g.rotate(); }}>
           ⟳ ROTATE
@@ -512,7 +649,6 @@ export default function App(): React.JSX.Element {
         </div>
       </div>
 
-      {/* pause overlay */}
       {g.paused && !g.over && (
         <Overlay>
           <div className="font-display text-title font-extrabold text-fg">PAUSED</div>
@@ -522,7 +658,6 @@ export default function App(): React.JSX.Element {
         </Overlay>
       )}
 
-      {/* game over overlay */}
       {g.over && (
         <Overlay>
           <div className="font-display text-title font-extrabold text-fg">{g.won ? 'SPRINT DONE' : 'GAME OVER'}</div>
